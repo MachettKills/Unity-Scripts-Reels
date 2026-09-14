@@ -1,0 +1,376 @@
+using UnityEngine;
+
+using UnityEngine.AI;
+
+using System.Collections;
+
+using UnityEngine.SceneManagement; // <-- Novo: Para poder reiniciar a cena
+
+
+
+public class EnemyAI : MonoBehaviour
+
+{
+
+    public enum AIState { Patrol, Chase, Investigate, GameOver } // Adicionado o estado GameOver
+
+    
+
+    [Header("AI Settings")]
+
+    public AIState currentState = AIState.Patrol;
+
+    public Transform player;
+
+    public Transform[] patrolPoints;
+
+
+
+    [Header("Detection Settings")]
+
+    public float viewDistance = 15f;
+
+    [Range(0, 360)] public float viewAngle = 50f;
+
+    public LayerMask obstacleLayer;
+
+
+
+    [Header("Search Settings")]
+
+    public float searchDuration = 4f;
+
+
+
+    [Header("UI Settings")]
+
+    public GameObject gameOverPanel; // <-- Arraste o GameOverPanel aqui
+
+
+
+    private NavMeshAgent agent;
+
+    private int currentPatrolIndex = 0;
+
+    private Vector3 lastKnownPosition;
+
+    private bool isSearching = false;
+
+
+
+    void Start()
+
+    {
+
+        agent = GetComponent<NavMeshAgent>();
+
+        if (patrolPoints.Length > 0)
+
+        {
+
+            agent.SetDestination(patrolPoints[currentPatrolIndex].position);
+
+        }
+
+
+
+        // Garante que a tela de game over comece fechada
+
+        if (gameOverPanel != null) gameOverPanel.SetActive(false);
+
+    }
+
+
+
+    void Update()
+
+    {
+
+        if (currentState == AIState.GameOver) return; // Se deu Game Over, para tudo
+
+
+
+        bool canSeePlayer = CheckLineOfSight();
+
+
+
+        // Verifica se alcançou o player para dar Game Over
+
+        CheckPlayerTouch();
+
+
+
+        switch (currentState)
+
+        {
+
+            case AIState.Patrol:
+
+                PatrolBehavior(canSeePlayer);
+
+                break;
+
+
+
+            case AIState.Chase:
+
+                ChaseBehavior(canSeePlayer);
+
+                break;
+
+
+
+            case AIState.Investigate:
+
+                InvestigateBehavior(canSeePlayer);
+
+                break;
+
+        }
+
+    }
+
+
+
+    void CheckPlayerTouch()
+
+    {
+
+        // Se a distância física entre o inimigo e o player for muito curta
+
+        float distanceToPlayer = Vector3.Distance(transform.position, player.position);
+
+        if (distanceToPlayer < 1.3f) // Ajuste dependendo do tamanho das cápsulas
+
+        {
+
+            TriggerGameOver();
+
+        }
+
+    }
+
+
+
+    void TriggerGameOver()
+
+    {
+
+        currentState = AIState.GameOver;
+
+        agent.isStopped = true; // Para o inimigo na hora
+
+        
+
+        if (gameOverPanel != null)
+
+        {
+
+            gameOverPanel.SetActive(true); // Ativa a tela de derrota
+
+        }
+
+
+
+        // Libera o mouse para o jogador conseguir clicar no botão
+
+        Cursor.lockState = CursorLockMode.None;
+
+        Cursor.visible = true;
+
+    }
+
+
+
+    // Função pública que o botão vai chamar para resetar
+
+    public void RestartGame()
+
+    {
+
+        // Recarrega a cena atual do zero
+
+        SceneManager.LoadScene(SceneManager.GetActiveScene().name);
+
+    }
+
+
+
+    // --- COMPORTAMENTOS ANTIGOS (MANTIDOS) ---
+
+
+
+    void PatrolBehavior(bool canSeePlayer)
+
+    {
+
+        if (canSeePlayer) { currentState = AIState.Chase; return; }
+
+        if (!agent.pathPending && agent.remainingDistance < 0.5f)
+
+        {
+
+            if (patrolPoints.Length == 0) return;
+
+            currentPatrolIndex = (currentPatrolIndex + 1) % patrolPoints.Length;
+
+            agent.SetDestination(patrolPoints[currentPatrolIndex].position);
+
+        }
+
+    }
+
+
+
+    void ChaseBehavior(bool canSeePlayer)
+
+    {
+
+        if (canSeePlayer)
+
+        {
+
+            agent.SetDestination(player.position);
+
+            lastKnownPosition = player.position;
+
+        }
+
+        else
+
+        {
+
+            currentState = AIState.Investigate;
+
+            agent.SetDestination(lastKnownPosition);
+
+        }
+
+    }
+
+
+
+    void InvestigateBehavior(bool canSeePlayer)
+
+    {
+
+        if (canSeePlayer)
+
+        {
+
+            isSearching = false;
+
+            StopAllCoroutines();
+
+            currentState = AIState.Chase;
+
+            return;
+
+        }
+
+        if (!agent.pathPending && agent.remainingDistance < 0.5f && !isSearching)
+
+        {
+
+            StartCoroutine(SearchRoutine());
+
+        }
+
+    }
+
+
+
+    IEnumerator SearchRoutine()
+
+    {
+
+        isSearching = true;
+
+        agent.isStopped = true;
+
+        float timer = 0f;
+
+        while (timer < searchDuration)
+
+        {
+
+            transform.Rotate(Vector3.up, Mathf.Sin(Time.time * 4f) * 100f * Time.deltaTime);
+
+            timer += Time.deltaTime;
+
+            yield return null;
+
+        }
+
+        agent.isStopped = false;
+
+        isSearching = false;
+
+        currentState = AIState.Patrol;
+
+        if (patrolPoints.Length > 0) agent.SetDestination(patrolPoints[currentPatrolIndex].position);
+
+    }
+
+
+
+    bool CheckLineOfSight()
+
+    {
+
+        Vector3 directionToPlayer = player.position - transform.position;
+
+        float distanceToPlayer = directionToPlayer.magnitude;
+
+        if (distanceToPlayer <= viewDistance)
+
+        {
+
+            float angle = Vector3.Angle(transform.forward, directionToPlayer);
+
+            if (angle <= viewAngle / 2f)
+
+            {
+
+                if (!Physics.Raycast(transform.position, directionToPlayer.normalized, distanceToPlayer, obstacleLayer))
+
+                {
+
+                    return true;
+
+                }
+
+            }
+
+        }
+
+        return false;
+
+    }
+
+
+
+    void OnDrawGizmos()
+
+    {
+
+        Gizmos.color = Color.yellow;
+
+        Gizmos.DrawWireSphere(transform.position, viewDistance);
+
+        Vector3 fwd = transform.forward;
+
+        Vector3 leftRay = Quaternion.Euler(0, -viewAngle / 2f, 0) * fwd;
+
+        Vector3 rightRay = Quaternion.Euler(0, viewAngle / 2f, 0) * fwd;
+
+        Gizmos.color = Color.red;
+
+        Gizmos.DrawLine(transform.position, transform.position + leftRay * viewDistance);
+
+        Gizmos.DrawLine(transform.position, transform.position + rightRay * viewDistance);
+
+    }
+
+} 
+
